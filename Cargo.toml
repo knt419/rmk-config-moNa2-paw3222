@@ -6,6 +6,13 @@ description = "RMK 0.9 firmware for moNa2 (PAW3222 trackball variant)"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
+[features]
+# PAW3222 trackball support (overrides the generated entry point).
+# Build with `--no-default-features` to isolate matrix/split/keymap problems
+# from the sensor path.
+default = ["trackball"]
+trackball = []
+
 [dependencies]
 rmk = { version = "0.9", default-features = false, features = [
     "defmt",

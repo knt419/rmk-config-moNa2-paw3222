@@ -63,6 +63,11 @@ jobs:
       - name: Build firmware (central + peripheral)
         run: cargo build --release --bins
 
+      # Keeps the documented bisect path (`--no-default-features`, stock RMK
+      # entry point without the PAW3222) compiling.
+      - name: Build bisect variant (no trackball)
+        run: cargo build --release --bin central --no-default-features
+
       - name: Report size
         run: |
           if command -v arm-none-eabi-size >/dev/null; then SIZE=arm-none-eabi-size; else SIZE=size; fi

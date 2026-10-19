@@ -12,7 +12,7 @@ ZMK config in [`knt419/zmk-for-moNa2-paw3222`](https://github.com/knt419/zmk-for
 | Firmware | RMK 0.9.0 (`rmk = "0.9"`), embassy async, no RTOS |
 | MCU | nRF52840 (Seeed XIAO nRF52840), SoftDevice Controller via `nrf-sdc` |
 | Split | BLE, 1 peripheral |
-| Flash | `0x26000`, 872 K — application partition behind the UF2 bootloader |
+| Flash | `0x1000`, 1020 K — application right after the protected MBR (no SoftDevice) |
 | Sizes (release) | central `text 466 K`, peripheral `text 283 K` |
 | Status | builds clean; **not yet tested on hardware** (see [Bring-up](#bring-up-checklist)) |
 
@@ -56,6 +56,49 @@ works too (`.cargo/config.toml` sets `probe-rs run --chip nRF52840_xxAA`).
 Debug logging goes over RTT (`DEFMT_LOG=info` in `.cargo/config.toml`), so
 `probe-rs attach` / `defmt-print` is needed to see it.
 
+## Troubleshooting
+
+**Flashed, but nothing happens at all** — no USB device, no BLE advertisement, neither
+half types. Check the link address before anything else:
+
+```bash
+arm-none-eabi-readelf -lW target/thumbv7em-none-eabihf/release/central | grep LOAD
+python3 tools/check_uf2.py          # must agree with memory.x
+```
+
+The first LOAD segment has to be at `0x00001000`. This board's UF2 bootloader carries
+**no SoftDevice**, so the application starts right after the 4 KB MBR. An image linked
+at `0x26000` — the *SoftDevice* partition layout ZMK uses
+(`nordic/nrf52840_partition_uf2_sdv7.dtsi`, where the SoftDevice occupies
+`0x1000..0x26000`) — flashes without any error and then never boots, because the
+bootloader jumps to `0x1000` and finds nothing. An earlier revision of this repo made
+exactly that mistake; `memory.x` now documents it inline, and `tools/elf2uf2.py` takes
+the UF2 base from the ELF's load address while `tools/check_uf2.py` cross-checks it
+against `memory.x`, so the two cannot drift again.
+
+**Keys work but the trackball does nothing.** Build the bisect image below to prove the
+keyboard path, then attach RTT (`probe-rs attach --chip nRF52840_xxAA`) and look for
+`PAW3222 detected (product id 0x30)`. If the product ID is wrong or the reads fail, the
+bit-banged SDIO transport is at fault — not CPI, not the transforms.
+
+**Left half types nothing, right half is fine.** That is the split link, not the matrix:
+check that both halves run the same build, clear the stored peer bond (`User7` on the
+System layer) and power-cycle both.
+
+### Bisect build: no trackball
+
+`--no-default-features` drops the `trackball` feature: `src/paw3222.rs` is not compiled
+and the `#[Overwritten(entry)]` override is replaced by RMK's stock generated entry
+point.
+
+```bash
+cargo build --release --bin central --no-default-features
+python3 tools/elf2uf2.py target/thumbv7em-none-eabihf/release/central central-notrackball.uf2
+```
+
+If keys work there but not in the default build, the fault is in the sensor wiring or
+the entry override — not in the matrix, the split config or the keymap.
+
 ## Continuous integration
 
 `.github/workflows/build.yml` runs on pushes to `main`, on pull requests, on
@@ -73,9 +116,9 @@ Debug logging goes over RTT (`DEFMT_LOG=info` in `.cargo/config.toml`), so
    `RUSTFLAGS=-D warnings` is deliberately *not* used, because it would also deny
    warnings coming from `rmk`/`embassy`.
 4. **Size report** — `arm-none-eabi-size` for both binaries, written to the job
-   summary next to the 872 K partition budget.
+   summary next to the 1020 K partition budget.
 5. **UF2 packaging** — `tools/elf2uf2.py`, then `tools/check_uf2.py` asserts block
-   magic, family `0xADA52840`, block numbering and the `0x26000` base.
+   magic, family `0xADA52840`, block numbering and the address `FLASH ORIGIN` in `memory.x`.
 6. **Artifacts** — `central`/`peripheral` `.uf2` plus the matching `.elf`, uploaded as
    `rmk-moNa2-paw3222-<ref>-<sha7>`.
 
@@ -188,7 +231,7 @@ vial.json            generated: Vial keyboard definition (44 matrix positions)
 src/central.rs       right half: trackball + transports + split central entry override
 src/peripheral.rs    left half (matrix/encoder/battery come from keyboard.toml)
 src/paw3222.rs       PAW3222 driver + RMK PointingDriver impl
-memory.x             FLASH 0x26000/872K, RAM 0x20000000/256K
+memory.x             FLASH 0x1000/1020K, RAM 0x20000008/255K
 .github/workflows/build.yml  CI: validate -> build both bins -> UF2 -> artifacts (release on v* tags)
 tools/port_zmk_keymap.py   ZMK .keymap + .dtsi  ->  keyboard.toml
 tools/gen_vial_json.py     -> vial.json
@@ -201,13 +244,16 @@ tools/check_uf2.py         validates UF2 magic / family / block numbering / base
 
 Nothing here has run on hardware yet. In order:
 
-1. Flash **central** first, watch RTT: expect `PAW3222 detected (product id 0x30)`.
+1. Confirm the image links at `0x1000` (`readelf -lW ... | grep LOAD`) before flashing
+   anything — a wrong origin looks like "dead keyboard", not like a bad flash.
+2. Flash **central** first, watch RTT: expect `PAW3222 detected (product id 0x30)`.
    If the product ID is wrong or reads fail, the bit-bang transport / wiring is at
-   fault — do not touch CPI or transforms yet.
-2. Move the ball: cursor motion over **USB** (plug the right half in) with the
+   fault — do not touch CPI or transforms yet. If nothing at all appears, flash the
+   `--no-default-features` build to rule the sensor path out.
+3. Move the ball: cursor motion over **USB** (plug the right half in) with the
    buttons, scroll layer (2) and sniper layer (3) behaving as expected.
-3. Flash the **left** half, confirm the halves pair (BLE split pairing is
+4. Flash the **left** half, confirm the halves pair (BLE split pairing is
    automatic on first boot; a stale bond needs `User7`).
-4. Check the encoder on both a base-layer and Number-layer detent.
-5. Then compare BLE cursor smoothness against the ZMK build, and only then tune
+5. Check the encoder on both a base-layer and Number-layer detent.
+6. Then compare BLE cursor smoothness against the ZMK build, and only then tune
    `DEFAULT_CPI`, `SCROLL_DIVISOR` in `src/central.rs`, or the auto-mouse threshold.

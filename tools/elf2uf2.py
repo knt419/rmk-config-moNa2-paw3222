@@ -10,6 +10,7 @@ Usage:  python3 tools/elf2uf2.py <elf> <out.uf2>
 from __future__ import annotations
 
 import pathlib
+import re
 import shutil
 import struct
 import subprocess
@@ -29,6 +30,30 @@ def objcopy_bin(elf: pathlib.Path, out: pathlib.Path) -> None:
     if not objcopy:
         raise SystemExit("arm-none-eabi-objcopy / llvm-objcopy not found on PATH")
     subprocess.run([objcopy, "-O", "binary", str(elf), str(out)], check=True)
+
+
+def load_base(elf: pathlib.Path) -> int:
+    """Lowest LOAD-segment physical address, i.e. where the image must be written.
+
+    Derived from the ELF instead of a constant: the flash origin lives in
+    `memory.x`, and a UF2 written to the wrong base flashes silently and never
+    boots.
+    """
+    readelf = shutil.which("arm-none-eabi-readelf") or shutil.which("llvm-readelf")
+    if not readelf:
+        raise SystemExit("arm-none-eabi-readelf / llvm-readelf not found on PATH")
+    text = subprocess.run([readelf, "-l", str(elf)], check=True, capture_output=True, text=True).stdout
+    addrs = [
+        int(m.group(1), 16)
+        for m in (
+            re.match(r"\s*LOAD\s+0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+\s+(0x[0-9a-fA-F]+)", line)
+            for line in text.splitlines()
+        )
+        if m
+    ]
+    if not addrs:
+        raise SystemExit(f"{elf}: no LOAD segments found")
+    return min(addrs)
 
 
 def make_uf2(blob: bytes, base: int, out: pathlib.Path) -> int:
@@ -66,9 +91,9 @@ def main() -> None:
         objcopy_bin(elf, raw)
         blob = raw.read_bytes()
 
-    base = 0x00026000  # application partition, see memory.x
+    base = load_base(elf)
     n = make_uf2(blob, base, out)
-    print(f"{out}: {n} blocks, {len(blob)} bytes, base {base:#010x}")
+    print(f"{out}: {n} blocks, {len(blob)} bytes, base {base:#010x} (from ELF load address)")
 
 
 if __name__ == "__main__":

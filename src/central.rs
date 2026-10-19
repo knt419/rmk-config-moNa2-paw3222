@@ -1,26 +1,41 @@
 #![no_main]
 #![no_std]
 
+//! Right half (split central) of the moNa2.
+//!
+//! With the default `trackball` feature the generated entry point is overridden
+//! so the PAW3222 can be built next to `&keymap`; see [`paw3222`].
+//! Build with `--no-default-features` for a stock RMK entry point and no
+//! trackball: that isolates the matrix / split / keymap path from the sensor
+//! when something does not work.
+
+#[cfg(feature = "trackball")]
 mod paw3222;
 
 use rmk::macros::rmk_central;
 
+#[cfg(feature = "trackball")]
 use rmk::event::{
     publish_event, EventSubscriber, LayerChangeEvent, PointingProcessorEvent, SubscribableEvent,
 };
+#[cfg(feature = "trackball")]
 use rmk::input_device::pointing::{CursorConfig, PointingMode, ScrollConfig, SniperConfig};
 
 /// Pointing device id of the trackball (must match the `PointingProcessor`).
+#[cfg(feature = "trackball")]
 const TRACKBALL_ID: u8 = 0;
 
 /// Layer whose ball motion scrolls instead of moving the cursor.
 /// ZMK config: layer 2 is SCROLL (`scroller { layers = <2>; }`).
+#[cfg(feature = "trackball")]
 const SCROLL_LAYER: u8 = 2;
 
 /// Precision layer. ZMK config: layer 3 is SNIPE (`sniper { layers = <3>; }`).
+#[cfg(feature = "trackball")]
 const SNIPE_LAYER: Option<u8> = Some(3);
 
 /// Counts of ball travel per scroll notch (144 ~= the moNa2 ZMK tuning).
+#[cfg(feature = "trackball")]
 const SCROLL_DIVISOR: u8 = 144;
 
 /// Translate layer changes into pointing-mode changes.
@@ -29,6 +44,7 @@ const SCROLL_DIVISOR: u8 = 144;
 /// modes when it receives a `PointingProcessorEvent`, but nothing in RMK 0.9
 /// publishes those from layer state, so this task bridges the two: it publishes
 /// the mode that matches the layer the keymap just activated.
+#[cfg(feature = "trackball")]
 async fn pointing_mode_task() {
     let mut layer_events = LayerChangeEvent::subscriber();
     let mut current_layer: Option<u8> = None;
@@ -65,6 +81,17 @@ async fn pointing_mode_task() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Bisect build: no trackball, stock generated entry point.
+// ---------------------------------------------------------------------------
+#[cfg(not(feature = "trackball"))]
+#[rmk_central]
+mod keyboard_central {}
+
+// ---------------------------------------------------------------------------
+// Default build: PAW3222 wired into the generated entry point.
+// ---------------------------------------------------------------------------
+#[cfg(feature = "trackball")]
 #[rmk_central]
 mod keyboard_central {
     /// Replace the generated "start everything" block so the PAW3222 can be
