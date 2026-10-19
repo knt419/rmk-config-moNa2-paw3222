@@ -56,6 +56,34 @@ works too (`.cargo/config.toml` sets `probe-rs run --chip nRF52840_xxAA`).
 Debug logging goes over RTT (`DEFMT_LOG=info` in `.cargo/config.toml`), so
 `probe-rs attach` / `defmt-print` is needed to see it.
 
+## Continuous integration
+
+`.github/workflows/build.yml` runs on pushes to `main`, on pull requests, on
+`workflow_dispatch`, and on `v*` tags:
+
+1. **Keycode validation** — `tools/check_keycodes.py` checks every action in
+   `keyboard.toml` against RMK's keycode enums. In a plain build the config parser
+   reports one unknown key per run, through a macro panic whose headline message is
+   empty, so this validates the whole file up front.
+2. **Vial drift check** — regenerates `vial.json` and fails if it differs from the
+   committed one.
+3. **Build both roles** — `cargo build --release --bins`. Split-peripheral and
+   central-only config sections are validated per binary, so both have to build.
+   Warnings are errors via `[lints.rust] warnings = "deny"` in `Cargo.toml`;
+   `RUSTFLAGS=-D warnings` is deliberately *not* used, because it would also deny
+   warnings coming from `rmk`/`embassy`.
+4. **Size report** — `arm-none-eabi-size` for both binaries, written to the job
+   summary next to the 872 K partition budget.
+5. **UF2 packaging** — `tools/elf2uf2.py`, then `tools/check_uf2.py` asserts block
+   magic, family `0xADA52840`, block numbering and the `0x26000` base.
+6. **Artifacts** — `central`/`peripheral` `.uf2` plus the matching `.elf`, uploaded as
+   `rmk-moNa2-paw3222-<ref>-<sha7>`.
+
+Pushing a `v*` tag additionally attaches both `.uf2` files to a GitHub Release.
+
+Each step was reproduced locally (see the commit message for the sizes and UF2
+checks); the workflow file itself has only been validated with `actionlint`.
+
 ## Edit the keymap
 
 The keymap is **generated**, so the ZMK config stays the single source of truth:
@@ -161,10 +189,12 @@ src/central.rs       right half: trackball + transports + split central entry ov
 src/peripheral.rs    left half (matrix/encoder/battery come from keyboard.toml)
 src/paw3222.rs       PAW3222 driver + RMK PointingDriver impl
 memory.x             FLASH 0x26000/872K, RAM 0x20000000/256K
+.github/workflows/build.yml  CI: validate -> build both bins -> UF2 -> artifacts (release on v* tags)
 tools/port_zmk_keymap.py   ZMK .keymap + .dtsi  ->  keyboard.toml
 tools/gen_vial_json.py     -> vial.json
 tools/check_keycodes.py    validates keycodes against rmk-types enums
 tools/elf2uf2.py           ELF -> UF2 (family 0xADA52840)
+tools/check_uf2.py         validates UF2 magic / family / block numbering / base
 ```
 
 ## Bring-up checklist

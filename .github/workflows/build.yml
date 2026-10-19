@@ -1,0 +1,125 @@
+name: Build RMK firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY: target/thumbv7em-none-eabihf/release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # nrf-mpsl-sys / nrf-sdc-sys / p256-cortex-m4-sys compile C sources, so a
+      # bare clang is not enough (no libc headers). This is the same toolchain
+      # family the README uses locally.
+      - name: Install ARM C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi
+
+      # Reads channel/target/components from rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          # flip-link is installed with `cargo install`, keep it cached too.
+          cache-bin: "true"
+
+      - name: Install flip-link
+        run: command -v flip-link || cargo install flip-link --locked
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      # The config parser reports one unknown keycode per build, and the macro
+      # surfaces it as an empty-message panic, so validate the whole file first.
+      - name: Validate keycodes against RMK enums
+        run: python3 tools/check_keycodes.py
+
+      - name: Check vial.json is in sync
+        run: |
+          python3 tools/gen_vial_json.py
+          git diff --exit-code --stat -- vial.json
+
+      # Both roles must build: split/peripheral-only config sections are
+      # validated per binary, so one green bin proves nothing about the other.
+      - name: Build firmware (central + peripheral)
+        run: cargo build --release --bins
+
+      - name: Report size
+        run: |
+          if command -v arm-none-eabi-size >/dev/null; then SIZE=arm-none-eabi-size; else SIZE=size; fi
+          $SIZE "$BINARY/central" "$BINARY/peripheral" | tee size.txt
+          {
+            echo '### Firmware size'
+            echo '```'
+            cat size.txt
+            echo '```'
+            echo "Application partition: 872K at 0x00026000"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package UF2
+        run: |
+          python3 tools/elf2uf2.py "$BINARY/central"    moNa2-paw3222-central.uf2
+          python3 tools/elf2uf2.py "$BINARY/peripheral" moNa2-paw3222-peripheral.uf2
+          python3 tools/check_uf2.py
+
+      - name: Sanitize artifact name
+        id: artifact
+        run: |
+          safe_ref="${GITHUB_REF_NAME//\//-}"
+          echo "name=rmk-moNa2-paw3222-${safe_ref}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          if-no-files-found: error
+          path: |
+            moNa2-paw3222-central.uf2
+            moNa2-paw3222-peripheral.uf2
+            ${{ env.BINARY }}/central
+            ${{ env.BINARY }}/peripheral
+
+  release:
+    # Pushing a v* tag publishes the two UF2 files as release assets.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.uf2
+          fail_on_unmatched_files: true
+          body: |
+            moNa2 (PAW3222) RMK 0.9 firmware.
+
+            - `moNa2-paw3222-central.uf2` → right half (central, trackball)
+            - `moNa2-paw3222-peripheral.uf2` → left half (peripheral, encoder)
+
+            Flash by double-tapping reset and copying the matching file to the
+            mounted drive.

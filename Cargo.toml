@@ -63,6 +63,11 @@ path = "src/central.rs"
 name = "peripheral"
 path = "src/peripheral.rs"
 
+[lints.rust]
+# Keep the firmware crate warning-free; applies to this package only, so
+# third-party crates (rmk, embassy, ...) cannot fail the build on their warnings.
+warnings = "deny"
+
 [build-dependencies]
 const-gen = "1"
 json = "0.12"
