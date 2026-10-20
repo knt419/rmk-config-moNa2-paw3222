@@ -61,10 +61,15 @@ const PRODUCT_ID_RETRY_MS: u64 = 100;
 /// travel, which is what keeps a BLE link from saturating.
 pub const DEFAULT_CPI: u16 = 2280;
 
-/// The sensor inverts both axes on this board (matching the ZMK overlay's
-/// `invert-x; invert-y;`).
-const INVERT_X: bool = true;
-const INVERT_Y: bool = true;
+/// Axis inversion for this sensor/mount.
+///
+/// The ZMK overlay carried `invert-x; invert-y;`, but the RMK path needs the raw
+/// deltas: with both flips enabled the cursor moved backwards on real hardware.
+/// Flip these individually if only one axis feels wrong — `INVERT_X` for
+/// left/right, `INVERT_Y` for up/down (and remember scroll mode uses the same
+/// signs).
+const INVERT_X: bool = false;
+const INVERT_Y: bool = false;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Paw3222Error {
@@ -156,8 +161,7 @@ where
     }
 
     /// Read the motion register and, if the sensor has data, the X/Y deltas.
-    /// Axis inversion (`INVERT_X`/`INVERT_Y`) is applied here, mirroring the
-    /// ZMK overlay's `invert-x;` / `invert-y;` properties.
+    /// Axis inversion (`INVERT_X`/`INVERT_Y`) is applied here.
     pub async fn read_delta(&mut self) -> Result<Option<MotionData>, Paw3222Error> {
         let motion = self.read_reg(MOTION).await?;
 

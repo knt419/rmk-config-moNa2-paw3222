@@ -86,8 +86,11 @@ resolution = 2
 [rmk]
 split_peripherals_num = 1
 ble_profiles_num = 5
-# Put the keyboard to sleep after 10 minutes without key/pointer activity.
-split_central_sleep_timeout_seconds = 600
+# Disabled on purpose. With a non-zero value RMK switches the split peripheral
+# link to slow connection parameters while idle, and keys pressed on the left
+# half right after a pause were being dropped. Set it to e.g. 600 to trade that
+# back for battery life.
+split_central_sleep_timeout_seconds = 0
 # The ZMK config defines 18 combos.
 combo_max_num = 32
 combo_max_length = 3

@@ -76,6 +76,33 @@ exactly that mistake; `memory.x` now documents it inline, and `tools/elf2uf2.py`
 the UF2 base from the ELF's load address while `tools/check_uf2.py` cross-checks it
 against `memory.x`, so the two cannot drift again.
 
+**Cursor moves the wrong way.** Flip `INVERT_X` / `INVERT_Y` at the top of
+`src/paw3222.rs`. The ZMK overlay for this board carries `invert-x; invert-y;`, but with
+both applied the RMK build moved the cursor backwards on hardware, so they default to
+`false`. Change only the axis that is wrong: `INVERT_X` for left/right, `INVERT_Y` for
+up/down (scroll mode uses the same signs).
+
+**Keys on the left half are dropped.** The left half is the BLE split peripheral, so a
+missing key is a lost split event, not a matrix fault — the right half typing fine proves
+the keymap and the central. Two known causes:
+
+- `[rmk] split_central_sleep_timeout_seconds` in `keyboard.toml`: with a non-zero value
+  RMK slows the peripheral link while idle, and the first key after a pause is lost. It is
+  `0` (disabled) by default here, which matches the known-good config; raise it to e.g.
+  `600` for battery life only once the link is trusted.
+- Stale bonds in flash from an earlier firmware: RMK's storage layout is not stable across
+  versions, so the central can be left holding a peer address / keys that no longer match.
+  Flash a `clear_storage` build once on **both** halves, then reflash the normal build and
+  re-pair the host:
+
+  ```bash
+  printf '\n[storage]\nenabled = true\nclear_storage = true\n' >> keyboard.toml
+  cargo build --release --bins
+  # flash both halves, restore keyboard.toml, rebuild, flash again
+  ```
+
+  `moNa2-paw3222-{central,peripheral}-storage-reset.uf2` are exactly that build.
+
 **Keys work but the trackball does nothing.** Build the bisect image below to prove the
 keyboard path, then attach RTT (`probe-rs attach --chip nRF52840_xxAA`) and look for
 `PAW3222 detected (product id 0x30)`. If the product ID is wrong or the reads fail, the
